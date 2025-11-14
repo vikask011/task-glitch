@@ -1,3 +1,4 @@
+// src/hooks/useTasks.ts
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DerivedTask, Metrics, Task } from '@/types';
 import {
@@ -7,7 +8,6 @@ import {
   computeTimeEfficiency,
   computeTotalRevenue,
   withDerived,
-  sortTasks as sortDerived,
 } from '@/utils/logic';
 // Local storage removed per request; keep everything in memory
 import { generateSalesTasks } from '@/utils/seed';
@@ -18,11 +18,12 @@ interface UseTasksState {
   error: string | null;
   derivedSorted: DerivedTask[];
   metrics: Metrics;
-  lastDeleted: Task | null;
+  lastDeleted: { task: Task; index: number } | null;
   addTask: (task: Omit<Task, 'id'> & { id?: string }) => void;
   updateTask: (id: string, patch: Partial<Task>) => void;
   deleteTask: (id: string) => void;
   undoDelete: () => void;
+  dismissUndo: () => void;
 }
 
 const INITIAL_METRICS: Metrics = {
@@ -34,170 +35,180 @@ const INITIAL_METRICS: Metrics = {
   performanceGrade: 'Needs Improvement',
 };
 
+// helper: priority rank
+const priorityRank = (p: Task['priority']) => (p === 'High' ? 3 : p === 'Medium' ? 2 : 1);
+
+// stable sort (ROI desc, priority desc, createdAt desc, title asc, id asc)
+function stableSort(tasks: DerivedTask[]): DerivedTask[] {
+  return [...tasks].sort((a, b) => {
+    if (a.roi !== b.roi) return b.roi - a.roi;
+    const pa = priorityRank(a.priority);
+    const pb = priorityRank(b.priority);
+    if (pa !== pb) return pb - pa;
+    // createdAt: newer first
+    if (a.createdAt !== b.createdAt) return b.createdAt.localeCompare(a.createdAt);
+    if (a.title !== b.title) return a.title.localeCompare(b.title);
+    return a.id.localeCompare(b.id);
+  });
+}
+
 export function useTasks(): UseTasksState {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastDeleted, setLastDeleted] = useState<Task | null>(null);
-  const fetchedRef = useRef(false);
+  // store lastDeleted with its original index so undo can restore position
+  const [lastDeleted, setLastDeleted] = useState<{ task: Task; index: number } | null>(null);
 
-  //  StrictMode double-fetch protection
+  // StrictMode-safe guard
   const initRef = useRef(false);
 
   function normalizeTasks(input: any[]): Task[] {
     const now = Date.now();
+    const seen = new Set<string>();
     return (Array.isArray(input) ? input : []).map((t, idx) => {
-      const created = t.createdAt ? new Date(t.createdAt) : new Date(now - (idx + 1) * 24 * 3600 * 1000);
-      const completed =
-        t.completedAt ||
-        (t.status === 'Done'
-          ? new Date(created.getTime() + 24 * 3600 * 1000).toISOString()
-          : undefined);
+      const created = t?.createdAt ? new Date(t.createdAt) : new Date(now - (idx + 1) * 24 * 3600 * 1000);
+      const completed = t?.completedAt || (t?.status === 'Done' ? new Date(created.getTime() + 24 * 3600 * 1000).toISOString() : undefined);
+
+      // generate/repair id
+      let id: string = typeof t?.id === 'string' && t.id ? t.id : (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      if (seen.has(id)) {
+        id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      }
+      seen.add(id);
+
+      const revenueRaw = Number(t?.revenue);
+      const revenue = Number.isFinite(revenueRaw) && revenueRaw >= 0 ? revenueRaw : 0;
+      const timeTaken = Number(t?.timeTaken) > 0 ? Number(t.timeTaken) : 1;
+      const title = (typeof t?.title === 'string' && t.title.trim()) ? t.title.trim() : `Untitled ${idx + 1}`;
+      const priority = (t?.priority === 'High' || t?.priority === 'Medium' || t?.priority === 'Low') ? t.priority : 'Medium';
+      const status = (t?.status === 'Done' || t?.status === 'Todo' || t?.status === 'InProgress') ? t.status : (t?.status ?? 'Todo');
+
       return {
-        id: t.id,
-        title: t.title,
-        revenue: Number(t.revenue) ?? 0,
-        timeTaken: Number(t.timeTaken) > 0 ? Number(t.timeTaken) : 1,
-        priority: t.priority,
-        status: t.status,
-        notes: t.notes,
+        id,
+        title,
+        revenue,
+        timeTaken,
+        priority,
+        status,
+        notes: t?.notes ?? '',
         createdAt: created.toISOString(),
         completedAt: completed,
       } as Task;
     });
   }
 
-  // Initial load: public JSON -> fallback generated dummy
+  // Initial load: run once and sanitize
   useEffect(() => {
-    if (initRef.current) return;     // only allow first run
+    if (initRef.current) return;
     initRef.current = true;
 
-    let isMounted = true;
-
-    async function load() {
+    let mounted = true;
+    (async () => {
       try {
         const res = await fetch('/tasks.json');
         if (!res.ok) throw new Error(`Failed to load tasks.json (${res.status})`);
         const data = (await res.json()) as any[];
-        const normalized: Task[] = normalizeTasks(data);
+        const normalized = normalizeTasks(data);
+        const finalData = normalized.length > 0 ? normalized : generateSalesTasks(50);
 
-        let finalData =
-          normalized.length > 0 ? normalized : generateSalesTasks(50);
+        if (!mounted) return;
 
-        // Injected bug: append a few malformed rows without validation
-        if (Math.random() < 0.5) {
-          finalData = [
-            ...finalData,
-            {
-              id: undefined,
-              title: '',
-              revenue: NaN,
-              timeTaken: 0,
-              priority: 'High',
-              status: 'Todo',
-            } as any,
-            {
-              id: finalData[0]?.id ?? 'dup-1',
-              title: 'Duplicate ID',
-              revenue: 9999999999,
-              timeTaken: -5,
-              priority: 'Low',
-              status: 'Done',
-            } as any,
-          ];
-        }
-
-        if (isMounted) setTasks(finalData);
+        setTasks(finalData);
+        setError(null);
       } catch (e: any) {
-        if (isMounted) setError(e?.message ?? 'Failed to load tasks');
+        if (!mounted) return;
+        setError(e?.message ?? 'Failed to load tasks');
       } finally {
-        if (isMounted) {
-          setLoading(false);
-          fetchedRef.current = true;
-        }
+        if (mounted) setLoading(false);
       }
-    }
+    })();
 
-    load();
-    return () => {
-      isMounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
 
-  //  Removed  the second-fetch bug
-  
-
+  // derived + stable sort
   const derivedSorted = useMemo<DerivedTask[]>(() => {
     const withRoi = tasks.map(withDerived);
-    return sortDerived(withRoi);
+    return stableSort(withRoi);
   }, [tasks]);
 
+  // metrics
   const metrics = useMemo<Metrics>(() => {
     if (tasks.length === 0) return INITIAL_METRICS;
-
     const totalRevenue = computeTotalRevenue(tasks);
     const totalTimeTaken = tasks.reduce((s, t) => s + t.timeTaken, 0);
     const timeEfficiencyPct = computeTimeEfficiency(tasks);
     const revenuePerHour = computeRevenuePerHour(tasks);
     const averageROI = computeAverageROI(tasks);
     const performanceGrade = computePerformanceGrade(averageROI);
-
-    return {
-      totalRevenue,
-      totalTimeTaken,
-      timeEfficiencyPct,
-      revenuePerHour,
-      averageROI,
-      performanceGrade,
-    };
+    return { totalRevenue, totalTimeTaken, timeEfficiencyPct, revenuePerHour, averageROI, performanceGrade };
   }, [tasks]);
 
+  // addTask (safe sanitization)
   const addTask = useCallback((task: Omit<Task, 'id'> & { id?: string }) => {
     setTasks(prev => {
-      const id = task.id ?? crypto.randomUUID();
-      const timeTaken = task.timeTaken <= 0 ? 1 : task.timeTaken; // auto-correct
+      const id = task.id ?? (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      const title = (task.title?.toString().trim() || 'Untitled Task');
+      const revenue = Number.isFinite(Number(task.revenue)) && Number(task.revenue) >= 0 ? Number(task.revenue) : 0;
+      const timeTaken = Number(task.timeTaken) > 0 ? Number(task.timeTaken) : 1;
+      const priority = (task.priority === 'High' || task.priority === 'Medium' || task.priority === 'Low') ? task.priority : 'Medium';
+      const status = (task.status === 'Done' || task.status === 'Todo' || task.status === 'InProgress') ? task.status : 'Todo';
       const createdAt = new Date().toISOString();
-      const status = task.status;
       const completedAt = status === 'Done' ? createdAt : undefined;
-      return [...prev, { ...task, id, timeTaken, createdAt, completedAt }];
+
+      const newTask: Task = { id, title, revenue, timeTaken, priority, status, notes: task.notes ?? '', createdAt, completedAt };
+      return [...prev, newTask];
     });
   }, []);
 
+  // updateTask (sanitize patch before applying)
   const updateTask = useCallback((id: string, patch: Partial<Task>) => {
     setTasks(prev => {
-      const next = prev.map(t => {
+      return prev.map(t => {
         if (t.id !== id) return t;
-
-        const merged = { ...t, ...patch } as Task;
-
+        const merged: Task = { ...t, ...patch };
+        merged.revenue = Number.isFinite(Number(merged.revenue)) && Number(merged.revenue) >= 0 ? Number(merged.revenue) : 0;
+        merged.timeTaken = Number(merged.timeTaken) > 0 ? Number(merged.timeTaken) : 1;
         if (t.status !== 'Done' && merged.status === 'Done' && !merged.completedAt) {
           merged.completedAt = new Date().toISOString();
         }
-
+        if (!merged.title || !merged.title.trim()) merged.title = t.title || 'Untitled';
         return merged;
       });
-
-      return next.map(t =>
-        t.id === id && (patch.timeTaken ?? t.timeTaken) <= 0
-          ? { ...t, timeTaken: 1 }
-          : t
-      );
     });
   }, []);
 
+  // deleteTask stores deleted task + its index
   const deleteTask = useCallback((id: string) => {
     setTasks(prev => {
-      const target = prev.find(t => t.id === id) || null;
-      setLastDeleted(target);
-      return prev.filter(t => t.id !== id);
+      const idx = prev.findIndex(p => p.id === id);
+      if (idx === -1) return prev;
+      const target = prev[idx];
+      const next = [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+      // store the deleted task and its index for undo
+      setLastDeleted({ task: target, index: idx });
+      return next;
     });
   }, []);
 
+  // undoDelete restores at original index if possible
   const undoDelete = useCallback(() => {
-    if (!lastDeleted) return;
-    setTasks(prev => [...prev, lastDeleted]);
+    setLastDeleted(prevLast => {
+      if (!prevLast) return null;
+      setTasks(curr => {
+        const idx = Math.min(Math.max(0, prevLast.index), curr.length);
+        const copy = [...curr];
+        copy.splice(idx, 0, prevLast.task);
+        return copy;
+      });
+      return null;
+    });
+  }, []);
+
+  // dismissUndo clears the lastDeleted (called by snackbar onExited)
+  const dismissUndo = useCallback(() => {
     setLastDeleted(null);
-  }, [lastDeleted]);
+  }, []);
 
   return {
     tasks,
@@ -210,5 +221,6 @@ export function useTasks(): UseTasksState {
     updateTask,
     deleteTask,
     undoDelete,
+    dismissUndo,
   };
 }

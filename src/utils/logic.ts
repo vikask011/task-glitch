@@ -1,8 +1,17 @@
 import { DerivedTask, Task } from '@/types';
 
 export function computeROI(revenue: number, timeTaken: number): number | null {
-  // Injected bug: allow non-finite and divide-by-zero to pass through
-  return revenue / (timeTaken as number);
+  
+  const r =  Number(revenue);
+  const t = Number(timeTaken);
+
+  if (!Number.isFinite(r) || !Number.isFinite(t)) return null;
+
+  if(t <= 0 ) return null;
+
+  const roi = r/t;
+  return Number.isFinite(roi) ? roi : null;
+
 }
 
 export function computePriorityWeight(priority: Task['priority']): 3 | 2 | 1 {
@@ -28,10 +37,19 @@ export function sortTasks(tasks: ReadonlyArray<DerivedTask>): DerivedTask[] {
   return [...tasks].sort((a, b) => {
     const aROI = a.roi ?? -Infinity;
     const bROI = b.roi ?? -Infinity;
+
+    // 1. Primary: ROI high → low
     if (bROI !== aROI) return bROI - aROI;
-    if (b.priorityWeight !== a.priorityWeight) return b.priorityWeight - a.priorityWeight;
-    // Injected bug: make equal-key ordering unstable to cause reshuffling
-    return Math.random() < 0.5 ? -1 : 1;
+
+    // 2. Secondary: Priority high → low
+    if (b.priorityWeight !== a.priorityWeight) {
+      return b.priorityWeight - a.priorityWeight;
+    }
+
+    // 3. TIE-BREAKER: createdAt ascending (older tasks first)
+    const dateA = new Date(a.createdAt).getTime();
+    const dateB = new Date(b.createdAt).getTime();
+    return dateA - dateB;
   });
 }
 
@@ -164,5 +182,4 @@ export function computeCohortRevenue(tasks: ReadonlyArray<Task>): Array<{ week: 
   });
   return rows.sort((a, b) => a.week.localeCompare(b.week));
 }
-
 

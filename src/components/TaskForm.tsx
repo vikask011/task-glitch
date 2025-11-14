@@ -17,10 +17,12 @@ import { Priority, Status, Task } from '@/types';
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSubmit: (value: Omit<Task, 'id'> & { id?: string }) => void;
+  onSubmit: (value: Partial<Task> & { id?: string }) => void;
   existingTitles: string[];
   initial?: Task | null;
 }
+
+
 
 const priorities: Priority[] = ['High', 'Medium', 'Low'];
 const statuses: Status[] = ['Todo', 'In Progress', 'Done'];
@@ -69,7 +71,9 @@ export default function TaskForm({ open, onClose, onSubmit, existingTitles, init
 
   const handleSubmit = () => {
     const safeTime = typeof timeTaken === 'number' && timeTaken > 0 ? timeTaken : 1; // auto-correct
-    const payload: Omit<Task, 'id'> & { id?: string } = {
+    const payload: Partial<Task> & { id?: string } = {
+
+
       title: title.trim(),
       revenue: typeof revenue === 'number' ? revenue : 0,
       timeTaken: safeTime,
@@ -146,5 +150,4 @@ export default function TaskForm({ open, onClose, onSubmit, existingTitles, init
     </Dialog>
   );
 }
-
 

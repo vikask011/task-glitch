@@ -9,10 +9,11 @@ interface TasksContextValue {
   derivedSorted: DerivedTask[];
   metrics: Metrics;
   lastDeleted: Task | null;
-  addTask: (task: Omit<Task, 'id'> & { id?: string }) => void;
+  addTask: (task: Partial<Task>) => void;        // ✅ FIXED
   updateTask: (id: string, patch: Partial<Task>) => void;
   deleteTask: (id: string) => void;
   undoDelete: () => void;
+  setLastDeleted: React.Dispatch<React.SetStateAction<Task | null>>;
 }
 
 const TasksContext = createContext<TasksContextValue | undefined>(undefined);
@@ -27,5 +28,4 @@ export function useTasksContext(): TasksContextValue {
   if (!ctx) throw new Error('useTasksContext must be used within TasksProvider');
   return ctx as TasksContextValue;
 }
-
 
