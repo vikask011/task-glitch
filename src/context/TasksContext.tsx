@@ -9,7 +9,7 @@ interface TasksContextValue {
   derivedSorted: DerivedTask[];
   metrics: Metrics;
   lastDeleted: Task | null;
-  addTask: (task: Partial<Task>) => void;        // ✅ FIXED
+  addTask: (task: Partial<Task>) => void;        // FIXED
   updateTask: (id: string, patch: Partial<Task>) => void;
   deleteTask: (id: string) => void;
   undoDelete: () => void;

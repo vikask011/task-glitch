@@ -19,8 +19,10 @@ import {
 } from '@/utils/logic';
 
 function AppContent() {
-  const { loading, error, metrics, derivedSorted, addTask, updateTask, deleteTask, undoDelete, lastDeleted } = useTasksContext();
-  const handleCloseUndo = () => {};
+  const { loading, error, metrics, derivedSorted, addTask, updateTask, deleteTask, undoDelete, lastDeleted, setLastDeleted } = useTasksContext();
+  const handleCloseUndo = () => {
+    setLastDeleted(null);
+  };
   const [q, setQ] = useState('');
   const [fStatus, setFStatus] = useState<string>('All');
   const [fPriority, setFPriority] = useState<string>('All');
@@ -42,10 +44,15 @@ function AppContent() {
     });
   }, [derivedSorted, q, fStatus, fPriority]);
 
-  const handleAdd = useCallback((payload: Omit<Task, 'id'>) => {
-    addTask(payload);
-    setActivity(prev => [createActivity('add', `Added: ${payload.title}`), ...prev].slice(0, 50));
-  }, [addTask, createActivity]);
+const handleAdd = useCallback((payload: Partial<Task>) => {
+  addTask(payload);
+  setActivity(prev => [
+    createActivity('add', `Added: ${payload.title}`),
+    ...prev,
+  ].slice(0, 50));
+}, [addTask, createActivity]);
+
+
   const handleUpdate = useCallback((id: string, patch: Partial<Task>) => {
     updateTask(id, patch);
     setActivity(prev => [createActivity('update', `Updated: ${Object.keys(patch).join(', ')}`), ...prev].slice(0, 50));
@@ -56,8 +63,9 @@ function AppContent() {
   }, [deleteTask, createActivity]);
   const handleUndo = useCallback(() => {
     undoDelete();
+    setLastDeleted(null);
     setActivity(prev => [createActivity('undo', 'Undo delete'), ...prev].slice(0, 50));
-  }, [undoDelete, createActivity]);
+  }, [undoDelete, createActivity, setLastDeleted]);
   return (
     <Box sx={{ minHeight: '100dvh', bgcolor: 'background.default' }}>
       <Container maxWidth="lg" sx={{ py: { xs: 3, md: 5 } }}>
@@ -142,5 +150,4 @@ export default function App() {
     </UserProvider>
   );
 }
-
 

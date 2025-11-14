@@ -46,10 +46,10 @@ export function sortTasks(tasks: ReadonlyArray<DerivedTask>): DerivedTask[] {
       return b.priorityWeight - a.priorityWeight;
     }
 
-    // 3. TIE-BREAKER: createdAt ascending (older tasks first)
-    const dateA = new Date(a.createdAt).getTime();
-    const dateB = new Date(b.createdAt).getTime();
-    return dateA - dateB;
+    
+    // 3. TIE-BREAKER: alphabetical title (stable)
+       return a.title.localeCompare(b.title);
+
   });
 }
 
